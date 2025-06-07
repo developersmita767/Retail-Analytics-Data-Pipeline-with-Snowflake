@@ -1,0 +1,1738 @@
+DROP DATABASE RETAIL_DB;
+DROP WAREHOUSE RETAIL_WH;
+-- Create warehouse
+CREATE OR REPLACE WAREHOUSE RETAIL_WH
+  WITH WAREHOUSE_SIZE = 'XSMALL'
+  AUTO_SUSPEND = 300
+  AUTO_RESUME = TRUE
+  INITIALLY_SUSPENDED = TRUE;
+
+CREATE OR REPLACE DATABASE RETAIL_DB;
+USE RETAIL_DB;
+CREATE OR REPLACE SCHEMA storage_integration;
+CREATE OR REPLACE SCHEMA file_formats;
+CREATE OR REPLACE SCHEMA EXTERNAL_STAGES;
+CREATE OR REPLACE SCHEMA pipes;
+CREATE OR REPLACE SCHEMA RETAIL_STG;
+CREATE OR REPLACE SCHEMA RETAIL_CORE;
+CREATE OR REPLACE SCHEMA TASKS;
+CREATE OR REPLACE SCHEMA RETAIL_AGG;
+CREATE OR REPLACE SCHEMA RETAIL_FACT;
+
+
+// Create file format object
+CREATE OR REPLACE file format RETAIL_DB.file_formats.csv_fileformat
+    type = csv
+    field_delimiter = ','
+    skip_header = 1
+    null_if = ('NULL','null')
+    empty_field_as_null = TRUE;
+/*
+File format CSV_FILEFORMAT successfully created.
+*/
+
+---create storage integretion  
+create or replace storage integration s3_retail_db_int
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = S3
+  ENABLED = TRUE 
+  STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::842675992970:role/project3_role'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://deproject3buckets/')
+  COMMENT = 'This an optional comment' ;
+
+DESC integration s3_retail_db_int;
+/*
+STORAGE_AWS_IAM_USER_ARN	String	arn:aws:iam::231580209547:user/kn611000-s	
+STORAGE_AWS_ROLE_ARN	String	arn:aws:iam::842675992970:role/project3_role	
+STORAGE_AWS_EXTERNAL_ID	String	VP58238_SFCRole=1_VXE2ZsgXj0Bd4JO6dGODj01oTg8=	
+*/
+
+--------------------------------------for project needed all------------------------------------------------
+
+--create customer_stage
+CREATE OR REPLACE STAGE RETAIL_STG.CUSTOMER_STAGE 
+URL='s3://deproject3buckets/customer_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area CUSTOMER_STAGE successfully created.
+*/
+--verify stage
+LIST @RETAIL_DB.RETAIL_STG.CUSTOMER_STAGE;
+/*
+s3://deproject3buckets/customer_data/customer_day1.csv	483	3b92948401364e396614c4b28a35f55e	Sat, 24 May 2025 07:42:26 GMT
+s3://deproject3buckets/customer_data/customer_day2.csv	239	2c27bb9b1c3ebcc8e6abf91538be8238	Sat, 24 May 2025 07:44:00 GMT
+s3://deproject3buckets/customer_data/customer_day3.csv	245	0f846c1f5a7e77916649f7f6fd53085e	Sat, 24 May 2025 07:44:37 GMT
+*/
+-- Customer staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_CUSTOMER (
+    customer_id INTEGER,
+    first_name VARCHAR,
+    last_name VARCHAR,
+    email VARCHAR,
+    phone VARCHAR,
+    address VARCHAR,
+    city VARCHAR,
+    state VARCHAR,
+    zip_code VARCHAR,
+    country VARCHAR,
+    registration_date DATE,
+    segment VARCHAR,
+    update_timestamp TIMESTAMP_NTZ
+);
+-- Customer core table
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_CUSTOMER (
+    customer_key INTEGER AUTOINCREMENT START 1 INCREMENT 1,
+    customer_id INTEGER,
+    first_name VARCHAR,
+    last_name VARCHAR,
+    email VARCHAR,
+    phone VARCHAR,
+    address VARCHAR,
+    city VARCHAR,
+    state VARCHAR,
+    zip_code VARCHAR,
+    country VARCHAR,
+    registration_date DATE,
+    segment VARCHAR,
+    effective_date TIMESTAMP_NTZ,
+    expiry_date TIMESTAMP_NTZ,
+    current_flag BOOLEAN,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_CUSTOMER successfully created.
+*/
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.CUSTOMER_PIPE
+auto_ingest = TRUE
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_CUSTOMER FROM @RETAIL_DB.RETAIL_STG.CUSTOMER_STAGE;
+/*Pipe CUSTOMER_PIPE successfully created.
+*/
+DESC pipe RETAIL_DB.PIPES.CUSTOMER_PIPE;
+/*
+2025-05-25 20:10:07.056 -0700	CUSTOMER_PIPE	RETAIL_DB	PIPES	COPY INTO RETAIL_DB.RETAIL_STG.STG_CUSTOMER FROM @RETAIL_DB.RETAIL_STG.CUSTOMER_STAGE	ACCOUNTADMIN	arn:aws:sqs:us-east-1:231580209547:sf-snowpipe-AIDATL22BSGF4A5KO3VFW-fSqjmhNnhxerri8NsI6Org					ROLE		STAGE
+*/
+--refresh pipe
+ALTER PIPE RETAIL_DB.PIPES.CUSTOMER_PIPE REFRESH;
+/*
+customer_day1.csv	SENT
+customer_day2.csv	SENT
+customer_day3.csv	SENT
+*/
+--pipe status
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.CUSTOMER_PIPE');
+/*
+{"executionState":"RUNNING","pendingFileCount":0,"lastIngestedTimestamp":"2025-05-26T03:11:08.587Z","lastIngestedFilePath":"customer_day3.csv","notificationChannelName":"arn:aws:sqs:us-east-1:231580209547:sf-snowpipe-AIDATL22BSGF4A5KO3VFW-fSqjmhNnhxerri8NsI6Org","numOutstandingMessagesOnChannel":0,"lastReceivedMessageTimestamp":"2025-05-21T07:00:15.612Z","lastPulledFromChannelTimestamp":"2025-05-26T03:11:51.419Z","pendingHistoryRefreshJobsCount":0}
+*/
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_CUSTOMER;
+/*
+1001	John	Smith	john.smith@email.com	555-1234	123 Main St	Chicago	IL	60601	USA	2023-01-15	Premium	2023-10-01 08:00:00.000
+1002	Jane	Doe	jane.doe@email.com	555-5678	456 Oak Ave	New York	NY	10001	USA	2023-02-20	Standard	2023-10-01 08:00:00.000
+1003	Robert	Johnson	robert.j@email.com	555-9012	789 Pine Rd	Los Angeles	CA	90001	USA	2023-03-10	Standard	2023-10-01 08:00:00.000
+1004	Emily	Davis	emily.d@email.com	555-3456	321 Elm St	Houston	TX	77001	USA	2023-04-05	Premium	2023-10-02 08:00:00.000
+1005	Daniel	Wilson	daniel.w@email.com	555-7890	654 Cedar Ln	Phoenix	AZ	85001	USA	2023-05-12	Standard	2023-10-03 08:00:00.000
+*/
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.PIPES.CUSTOMER_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+   
+--Useing Task
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.CUSTOMER_MERGE_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute --OR'USING CRON 5 0 * * * UTC'  --Runs every day at 05:35 AM IST (Daily)-- or SCHEDULE = '1 minute'
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_CUSTOMER AS TGT
+USING (
+    SELECT * FROM RETAIL_DB.RETAIL_STG.STG_CUSTOMER
+) AS SRC
+ON TGT.customer_id = SRC.customer_id AND TGT.current_flag = TRUE
+WHEN MATCHED AND (
+    TGT.first_name <> SRC.first_name OR
+    TGT.last_name <> SRC.last_name OR
+    TGT.email <> SRC.email OR
+    TGT.phone <> SRC.phone OR
+    TGT.address <> SRC.address OR
+    TGT.city <> SRC.city OR
+    TGT.state <> SRC.state OR
+    TGT.zip_code <> SRC.zip_code OR
+    TGT.country <> SRC.country OR
+    TGT.segment <> SRC.segment
+) THEN
+    -- Expire old record
+    UPDATE SET current_flag = FALSE,
+               expiry_date = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED THEN
+    -- Insert new record
+    INSERT (
+        customer_id, first_name, last_name, email, phone,
+        address, city, state, zip_code, country,
+        registration_date, segment, effective_date, expiry_date,
+        current_flag, update_timestamp
+    )
+    VALUES (
+        SRC.customer_id, SRC.first_name, SRC.last_name, SRC.email, SRC.phone,
+        SRC.address, SRC.city, SRC.state, SRC.zip_code, SRC.country,
+        SRC.registration_date, SRC.segment, CURRENT_TIMESTAMP(), NULL,
+        TRUE, SRC.update_timestamp
+    );
+/*
+Task CUSTOMER_MERGE_TASK successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.CUSTOMER_MERGE_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+--check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_CUSTOMER;
+/*
+1	1001	John	Smith	john.smith@email.com	555-1234	123 Main St	Chicago	IL	60601	USA	2023-01-15	Premium	2025-05-25 20:14:30.492		TRUE	2023-10-01 08:00:00.000
+2	1002	Jane	Doe	jane.doe@email.com	555-5678	456 Oak Ave	New York	NY	10001	USA	2023-02-20	Standard	2025-05-25 20:14:30.492		TRUE	2023-10-01 08:00:00.000
+3	1003	Robert	Johnson	robert.j@email.com	555-9012	789 Pine Rd	Los Angeles	CA	90001	USA	2023-03-10	Standard	2025-05-25 20:14:30.492		TRUE	2023-10-01 08:00:00.000
+4	1004	Emily	Davis	emily.d@email.com	555-3456	321 Elm St	Houston	TX	77001	USA	2023-04-05	Premium	2025-05-25 20:14:30.492		TRUE	2023-10-02 08:00:00.000
+5	1005	Daniel	Wilson	daniel.w@email.com	555-7890	654 Cedar Ln	Phoenix	AZ	85001	USA	2023-05-12	Standard	2025-05-25 20:14:30.492		TRUE	2023-10-03 08:00:00.000
+*/
+---for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_CUSTOMER;
+       --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_CUSTOMER
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute 'USING CRON 0 0 * * * UTC' ----Runs every day at 05:30 AM IST (Daily)
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_CUSTOMER;
+/*
+Task TRUNCATE_STAGE_CUSTOMER successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_CUSTOMER RESUME;
+SHOW TASKS;
+select * from RETAIL_DB.RETAIL_STG.STG_CUSTOMER;
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.CUSTOMER_MERGE_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_CUSTOMER SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+   
+               --------sucessfuly Loaded All Code-------------
+
+--create stage products
+CREATE OR REPLACE STAGE RETAIL_STG.PRODUCTS_STAGE URL='s3://deproject3buckets/products_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area PRODUCTS_STAGE successfully created.
+*/
+--verify stage
+LIST @RETAIL_DB.RETAIL_STG.PRODUCTS_STAGE;
+/*
+s3://deproject3buckets/products_data/product_day1.csv	465	3285a3bc390e1fb8e71fd4de1ed80e8e	Sat, 24 May 2025 07:53:28 GMT
+s3://deproject3buckets/products_data/product_day2.csv	231	c327095dbc273ee436bc4c67026b8006	Sat, 24 May 2025 07:52:39 GMT
+s3://deproject3buckets/products_data/product_day3.csv	51	64fac36f76da9caa97810e02d4d66312	Sat, 24 May 2025 07:51:57 GMT
+*/
+-- Product staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_PRODUCT (
+    product_id INTEGER,
+    product_name VARCHAR,
+    description VARCHAR,
+    category VARCHAR,
+    sub_category VARCHAR,
+    brand VARCHAR,
+    price NUMBER(10,2),
+    cost NUMBER(10,2),
+    weight NUMBER(10,2),
+    manufacturer VARCHAR,
+    supplier_id INTEGER,
+    update_timestamp TIMESTAMP_NTZ
+);
+-- core Product
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS (
+    product_key INTEGER AUTOINCREMENT START 1 INCREMENT 1,
+    product_id INTEGER,
+    product_name VARCHAR,
+    description VARCHAR,
+    category VARCHAR,
+    sub_category VARCHAR,
+    brand VARCHAR,
+    price NUMBER(10,2),
+    cost NUMBER(10,2),
+    weight NUMBER(10,2),
+    manufacturer VARCHAR,
+    supplier_id INTEGER,
+    effective_date TIMESTAMP_NTZ,
+    expiry_date TIMESTAMP_NTZ,
+    current_flag BOOLEAN,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_PRODUCTS successfully created.
+*/
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.PRODUCTS_PIPE 
+auto_ingest = TRUE
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_PRODUCT FROM @RETAIL_DB.RETAIL_STG.PRODUCTS_STAGE ;
+/*
+Pipe PRODUCTS_PIPE successfully created.
+*/
+DESC pipe RETAIL_DB.PIPES.PRODUCTS_PIPE;
+/*
+2025-05-25 20:20:44.467 -0700	PRODUCTS_PIPE	RETAIL_DB	PIPES	COPY INTO RETAIL_DB.RETAIL_STG.STG_PRODUCT FROM @RETAIL_DB.RETAIL_STG.PRODUCTS_STAGE	ACCOUNTADMIN	arn:aws:sqs:us-east-1:231580209547:sf-snowpipe-AIDATL22BSGF4A5KO3VFW-fSqjmhNnhxerri8NsI6Org					ROLE		STAGE
+*/
+--for refresh
+ALTER PIPE RETAIL_DB.PIPES.PRODUCTS_PIPE REFRESH;
+/*
+product_day1.csv	SENT
+product_day2.csv	SENT
+product_day3.csv	SENT
+*/
+--verify pipe status
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.PRODUCTS_PIPE');
+/*
+{"executionState":"RUNNING","pendingFileCount":0,"notificationChannelName":"arn:aws:sqs:us-east-1:231580209547:sf-snowpipe-AIDATL22BSGF4A5KO3VFW-fSqjmhNnhxerri8NsI6Org","numOutstandingMessagesOnChannel":0,"lastReceivedMessageTimestamp":"2025-05-21T07:00:15.612Z","lastPulledFromChannelTimestamp":"2025-05-26T03:21:52.649Z","pendingHistoryRefreshJobsCount":0}
+*/
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_PRODUCT;
+/*
+2001	Laptop	15-inch laptop	Electronics	Computers	Dell	999.99	700.00	3.50	Dell Inc	3001	2023-10-01 08:00:00.000
+2002	Smartphone	6.5-inch smartphone	Electronics	Phones	Samsung	799.99	550.00	0.40	Samsung Corp	3002	2023-10-01 08:00:00.000
+2003	Headphones	Wireless headphones	Electronics	Audio	Sony	199.99	120.00	0.30	Sony Electronics	3003	2023-10-01 08:00:00.000
+2004	Tablet	10-inch tablet	Electronics	Computers	Apple	499.99	350.00	1.20	Apple Inc	3004	2023-10-02 08:00:00.000
+*/
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.PIPES.PRODUCTS_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+    
+-- Step 1: Create a task to do SCD Type 2 merge from staging to core
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.MERGE_PRODUCTS_TASK
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute --OR 'USING CRON 5 0 * * * UTC' --Runs every day at 05:35 AM IST (Daily) --OR SCHEDULE = '1 minute'
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS tgt
+USING (
+    SELECT * FROM RETAIL_DB.RETAIL_STG.STG_PRODUCT
+) src
+ON tgt.product_id = src.product_id
+   AND tgt.current_flag = TRUE
+   AND (
+       tgt.product_name != src.product_name OR
+       tgt.description != src.description OR
+       tgt.category != src.category OR
+       tgt.sub_category != src.sub_category OR
+       tgt.brand != src.brand OR
+       tgt.price != src.price OR
+       tgt.cost != src.cost OR
+       tgt.weight != src.weight OR
+       tgt.manufacturer != src.manufacturer OR
+       tgt.supplier_id != src.supplier_id OR
+       tgt.update_timestamp != src.update_timestamp
+   )
+WHEN MATCHED THEN
+  -- Expire the existing record
+  UPDATE SET tgt.expiry_date = CURRENT_TIMESTAMP,
+             tgt.current_flag = FALSE
+WHEN NOT MATCHED THEN
+  -- Insert new record
+  INSERT (
+      product_id,
+      product_name,
+      description,
+      category,
+      sub_category,
+      brand,
+      price,
+      cost,
+      weight,
+      manufacturer,
+      supplier_id,
+      effective_date,
+      expiry_date,
+      current_flag,
+      update_timestamp
+  )
+  VALUES (
+      src.product_id,
+      src.product_name,
+      src.description,
+      src.category,
+      src.sub_category,
+      src.brand,
+      src.price,
+      src.cost,
+      src.weight,
+      src.manufacturer,
+      src.supplier_id,
+      CURRENT_TIMESTAMP,
+      NULL,
+      TRUE,
+      src.update_timestamp
+  );
+/*
+Task MERGE_PRODUCTS_TASK successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.MERGE_PRODUCTS_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS; 
+--check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS;
+/*
+1	2001	Laptop	15-inch laptop	Electronics	Computers	Dell	999.99	700.00	3.50	Dell Inc	3001	2025-05-25 20:24:51.744		TRUE	2023-10-01 08:00:00.000
+2	2002	Smartphone	6.5-inch smartphone	Electronics	Phones	Samsung	799.99	550.00	0.40	Samsung Corp	3002	2025-05-25 20:24:51.744		TRUE	2023-10-01 08:00:00.000
+3	2003	Headphones	Wireless headphones	Electronics	Audio	Sony	199.99	120.00	0.30	Sony Electronics	3003	2025-05-25 20:24:51.744		TRUE	2023-10-01 08:00:00.000
+4	2004	Tablet	10-inch tablet	Electronics	Computers	Apple	499.99	350.00	1.20	Apple Inc	3004	2025-05-25 20:24:51.744		TRUE	2023-10-02 08:00:00.000
+*/
+--for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_PRODUCT;
+      --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_PRODUCT
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute --OR'USING CRON 0 0 * * * UTC'
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_PRODUCT;      
+/*
+Statement executed successfully.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_PRODUCT RESUME;
+SHOW TASKS;
+select * from RETAIL_DB.RETAIL_STG.STG_PRODUCT;
+
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.MERGE_PRODUCTS_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_PRODUCT SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+                          ----sucessfuly Loaded All Codes----
+
+                          
+--create store stage
+CREATE OR REPLACE STAGE RETAIL_STG.STORE_STAGE 
+URL='s3://deproject3buckets/store_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area STORE_STAGE successfully created.
+*/
+--verify stage
+LIST @RETAIL_DB.RETAIL_STG.STORE_STAGE;
+/*
+s3://de.project.3.public.bucket/Stores_data/store_day1.csv	329	136d284b6b08bb3a229eb3a929e67252	Wed, 21 May 2025 16:45:01 GMT
+s3://de.project.3.public.bucket/Stores_data/store_day2.csv	80	ae4fd716bcc5eee58652ce0bd6331679	Wed, 21 May 2025 16:45:02 GMT
+s3://de.project.3.public.bucket/Stores_data/store_day3.csv	230	7b957801363247e4ba2b5c3ff9d2bbf5	Wed, 21 May 2025 16:45:03 GMT
+*/
+-- Store staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_STORE (
+    store_id INTEGER,
+    store_name VARCHAR,
+    address VARCHAR,
+    city VARCHAR,
+    state VARCHAR,
+    zip_code VARCHAR,
+    country VARCHAR,
+    phone VARCHAR,
+    manager_id INTEGER,
+    opening_date DATE,
+    square_footage INTEGER,
+    update_timestamp TIMESTAMP_NTZ
+);
+-- core Store
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_STORE (
+    store_key INTEGER AUTOINCREMENT START 1 INCREMENT 1,
+    store_id INTEGER,
+    store_name VARCHAR,
+    address VARCHAR,
+    city VARCHAR,
+    state VARCHAR,
+    zip_code VARCHAR,
+    country VARCHAR,
+    phone VARCHAR,
+    manager_id INTEGER,
+    opening_date DATE,
+    square_footage INTEGER,
+    effective_date TIMESTAMP_NTZ,
+    expiry_date TIMESTAMP_NTZ,
+    current_flag BOOLEAN,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_STORE successfully created.
+*/
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.STORE_PIPE 
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_STORE FROM 
+@RETAIL_DB.RETAIL_STG.STORE_STAGE ;
+/*
+Pipe STORE_PIPE successfully created.
+*/
+
+DESC pipe RETAIL_DB.PIPES.STORE_PIPE;
+/*
+2025-05-25 20:28:53.392 -0700	STORE_PIPE	RETAIL_DB	PIPES	COPY INTO RETAIL_DB.RETAIL_STG.STG_STORE FROM 
+@RETAIL_DB.RETAIL_STG.STORE_STAGE	ACCOUNTADMIN						ROLE		STAGE
+*/
+--refresh pipe
+ALTER PIPE RETAIL_DB.PIPES.STORE_PIPE REFRESH;
+/*
+store_day1.csv	SENT
+store_day2.csv	SENT
+store_day3.csv	SENT
+*/
+--pipe status
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.STORE_PIPE');
+/*
+{"executionState":"RUNNING","pendingFileCount":0,"lastIngestedTimestamp":"2025-05-26T03:29:45.318Z","lastIngestedFilePath":"store_day2.csv","pendingHistoryRefreshJobsCount":0}
+*/
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_STORE;
+/*
+4001	Main Store	123 Retail Ave	Chicago	IL	60601	USA	555-1001	5001	2022-01-15	10000	2023-10-01 08:00:00.000
+4002	Downtown Store	456 Commerce St	New York	NY	10001	USA	555-1002	5002	2022-02-20	8000	2023-10-01 08:00:00.000
+4003	Mall Store	"789 Shopping Blvd"	LosAngeles	CA	90001	USA	555-1003	5005	2022-03-01	7500	2023-10-03 08:00:00.000
+*/
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.PIPES.STORE_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+    
+-- Step 1: Create the task
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.MERGE_STORE_TASK
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute --OR SCHEDULE = 'USING CRON 5 0 * * * UTC' --Runs every day at 05:35 AM IST (Daily)--OR SCHEDULE = '1 minute'
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_STORE tgt
+USING (
+    SELECT * FROM RETAIL_DB.RETAIL_STG.STG_STORE
+) src
+ON tgt.store_id = src.store_id
+   AND tgt.current_flag = TRUE
+   AND (
+       tgt.store_name != src.store_name OR
+       tgt.address != src.address OR
+       tgt.city != src.city OR
+       tgt.state != src.state OR
+       tgt.zip_code != src.zip_code OR
+       tgt.country != src.country OR
+       tgt.phone != src.phone OR
+       tgt.manager_id != src.manager_id OR
+       tgt.opening_date != src.opening_date OR
+       tgt.square_footage != src.square_footage OR
+       tgt.update_timestamp != src.update_timestamp
+   )
+WHEN MATCHED THEN
+  UPDATE SET tgt.expiry_date = CURRENT_TIMESTAMP,
+             tgt.current_flag = FALSE
+WHEN NOT MATCHED THEN
+  INSERT (
+      store_id,
+      store_name,
+      address,
+      city,
+      state,
+      zip_code,
+      country,
+      phone,
+      manager_id,
+      opening_date,
+      square_footage,
+      effective_date,
+      expiry_date,
+      current_flag,
+      update_timestamp
+  )
+  VALUES (
+      src.store_id,
+      src.store_name,
+      src.address,
+      src.city,
+      src.state,
+      src.zip_code,
+      src.country,
+      src.phone,
+      src.manager_id,
+      src.opening_date,
+      src.square_footage,
+      CURRENT_TIMESTAMP,
+      NULL,
+      TRUE,
+      src.update_timestamp
+  );
+/*
+Task MERGE_STORE_TASK successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.MERGE_STORE_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;  
+--check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_STORE;
+/*
+1	4001	Main Store	123 Retail Ave	Chicago	IL	60601	USA	555-1001	5001	2022-01-15	10000	2025-05-25 20:32:48.201		TRUE	2023-10-01 08:00:00.000
+2	4002	Downtown Store	456 Commerce St	New York	NY	10001	USA	555-1002	5002	2022-02-20	8000	2025-05-25 20:32:48.201		TRUE	2023-10-01 08:00:00.000
+3	4003	Mall Store	"789 Shopping Blvd"	LosAngeles	CA	90001	USA	555-1003	5005	2022-03-01	7500	2025-05-25 20:32:48.201		TRUE	2023-10-03 08:00:00.000
+*/
+--for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_STORE;
+     --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_STORE
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute OR SCHEDULE = 'USING CRON 0 0 * * * UTC'
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_STORE;    
+/*
+Statement executed successfully.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_STORE RESUME;
+SHOW TASKS;
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_STORE;
+
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.MERGE_STORE_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_STORE SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+                        -----sucessfuly Loaded All Codes----
+
+
+--create stage EMPLOYEE
+CREATE OR REPLACE STAGE RETAIL_STG.EMPLOYEE_STAGE URL='s3://deproject3buckets/employee_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area EMPLOYEE_STAGE successfully created.
+*/
+--verify stage
+LIST @RETAIL_DB.RETAIL_STG.EMPLOYEE_STAGE;
+/*
+s3://de.project.3.public.bucket/Employees_data/employee_day1.csv	467	9d3477b28ec8cdd98524572e806199f1	Wed, 21 May 2025 16:41:04 GMT
+s3://de.project.3.public.bucket/Employees_data/employee_day2.csv	240	25e409cf8edc587dac006c2eaef7d70b	Wed, 21 May 2025 16:41:03 GMT
+s3://de.project.3.public.bucket/Employees_data/employee_day3.csv	359	9cc2efdc7ab334a591c77dc96088d1bf	Wed, 21 May 2025 16:41:02 GMT
+*/
+-- Employee staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_EMPLOYEE (
+    employee_id INTEGER,
+    first_name VARCHAR,
+    last_name VARCHAR,
+    email VARCHAR,
+    phone VARCHAR,
+    hire_date DATE,
+    position VARCHAR,
+    department VARCHAR,
+    salary NUMBER(10,2),
+    manager_id INTEGER,
+    store_id INTEGER,
+    update_timestamp TIMESTAMP_NTZ
+);
+-- core Employee
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_EMPLOYEE (
+    employee_key INTEGER AUTOINCREMENT START 1 INCREMENT 1,
+    employee_id INTEGER,
+    first_name VARCHAR,
+    last_name VARCHAR,
+    email VARCHAR,
+    phone VARCHAR,
+    hire_date DATE,
+    position VARCHAR,
+    department VARCHAR,
+    salary NUMBER(10,2),
+    manager_id INTEGER,
+    store_id INTEGER,
+    effective_date TIMESTAMP_NTZ,
+    expiry_date TIMESTAMP_NTZ,
+    current_flag BOOLEAN,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_EMPLOYEE successfully created.
+*/
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.EMPLOYEE_PIPE
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_EMPLOYEE FROM @RETAIL_DB.RETAIL_STG.EMPLOYEE_STAGE ;
+/*
+Pipe EMPLOYEE_PIPE successfully created.
+*/
+DESC pipe RETAIL_DB.PIPES.CUSTOMER_PIPE;
+/*
+2025-05-25 20:10:07.056 -0700	CUSTOMER_PIPE	RETAIL_DB	PIPES	COPY INTO RETAIL_DB.RETAIL_STG.STG_CUSTOMER FROM @RETAIL_DB.RETAIL_STG.CUSTOMER_STAGE	ACCOUNTADMIN	arn:aws:sqs:us-east-1:231580209547:sf-snowpipe-AIDATL22BSGF4A5KO3VFW-fSqjmhNnhxerri8NsI6Org					ROLE		STAGE
+*/
+--refresh pipe
+ALTER PIPE RETAIL_DB.PIPES.EMPLOYEE_PIPE REFRESH;
+/*
+employee_day1.csv	SENT
+employee_day2.csv	SENT
+employee_day3.csv	SENT
+*/
+--verify pipe
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.EMPLOYEE_PIPE');
+/*
+{"executionState":"RUNNING","pendingFileCount":0,"lastIngestedTimestamp":"2025-05-26T06:26:22.123Z","lastIngestedFilePath":"employee_day3.csv","pendingHistoryRefreshJobsCount":0}
+*/
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_EMPLOYEE;
+/*
+5001	Michael	Brown	michael.b@store.com	555-2001	2022-01-10	Store Manager	Management	65000.00		4001	2023-10-01 08:00:00.000
+5002	Sarah	Wilson	sarah.w@store.com	555-2002	2022-02-15	Store Manager	Management	62000.00		4002	2023-10-01 08:00:00.000
+5003	David	Lee	david.l@store.com	555-2003	2023-01-20	Sales Associate	Sales	42000.00	5001	4001	2023-10-01 08:00:00.000
+5004	Jessica	Moore	jessica.m@store.com	555-2004	2023-03-15	SalesAssociate	Sales	41000.00	5002	4002	2023-10-02 08:00:00.000
+5005	Thomas	Anderson	thomas.a@store.com	555-2005	2022-03-05	StoreManager	Management	63000.00		4003	2023-10-03 08:00:00.000
+5006	Lisa	Garcia	lisa.g@store.com	555-2006	2023-04-10	SalesAssociate	Sales	43000.00	5005	4003	2023-10-03 08:00:00.000
+*/
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.PIPES.EMPLOYEE_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+    
+-- Step 1: Create the Task
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.MERGE_EMPLOYEE_TASK
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute OR SCHEDULE = '1 minute'  -- you can adjust this or use CRON syntax
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_EMPLOYEE tgt
+USING (
+    SELECT * FROM RETAIL_DB.RETAIL_STG.STG_EMPLOYEE
+) src
+ON tgt.employee_id = src.employee_id
+   AND tgt.current_flag = TRUE
+   AND (
+       tgt.first_name != src.first_name OR
+       tgt.last_name != src.last_name OR
+       tgt.email != src.email OR
+       tgt.phone != src.phone OR
+       tgt.hire_date != src.hire_date OR
+       tgt.position != src.position OR
+       tgt.department != src.department OR
+       tgt.salary != src.salary OR
+       tgt.manager_id != src.manager_id OR
+       tgt.store_id != src.store_id OR
+       tgt.update_timestamp != src.update_timestamp
+   )
+WHEN MATCHED THEN
+  -- Expire the existing record
+  UPDATE SET tgt.expiry_date = CURRENT_TIMESTAMP,
+             tgt.current_flag = FALSE
+WHEN NOT MATCHED THEN
+  -- Insert new record
+  INSERT (
+      employee_id,
+      first_name,
+      last_name,
+      email,
+      phone,
+      hire_date,
+      position,
+      department,
+      salary,
+      manager_id,
+      store_id,
+      effective_date,
+      expiry_date,
+      current_flag,
+      update_timestamp
+  )
+  VALUES (
+      src.employee_id,
+      src.first_name,
+      src.last_name,
+      src.email,
+      src.phone,
+      src.hire_date,
+      src.position,
+      src.department,
+      src.salary,
+      src.manager_id,
+      src.store_id,
+      CURRENT_TIMESTAMP,
+      NULL,
+      TRUE,
+      src.update_timestamp
+  );
+/*
+Task MERGE_EMPLOYEE_TASK successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.MERGE_EMPLOYEE_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;       
+--check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_EMPLOYEE;
+/*
+1	5001	Michael	Brown	michael.b@store.com	555-2001	2022-01-10	Store Manager	Management	65000.00		4001	2025-05-25 23:29:10.999		TRUE	2023-10-01 08:00:00.000
+2	5002	Sarah	Wilson	sarah.w@store.com	555-2002	2022-02-15	Store Manager	Management	62000.00		4002	2025-05-25 23:29:10.999		TRUE	2023-10-01 08:00:00.000
+3	5003	David	Lee	david.l@store.com	555-2003	2023-01-20	Sales Associate	Sales	42000.00	5001	4001	2025-05-25 23:29:10.999		TRUE	2023-10-01 08:00:00.000
+4	5004	Jessica	Moore	jessica.m@store.com	555-2004	2023-03-15	SalesAssociate	Sales	41000.00	5002	4002	2025-05-25 23:29:10.999		TRUE	2023-10-02 08:00:00.000
+5	5005	Thomas	Anderson	thomas.a@store.com	555-2005	2022-03-05	StoreManager	Management	63000.00		4003	2025-05-25 23:29:10.999		TRUE	2023-10-03 08:00:00.000
+6	5006	Lisa	Garcia	lisa.g@store.com	555-2006	2023-04-10	SalesAssociate	Sales	43000.00	5005	4003	2025-05-25 23:29:10.999		TRUE	2023-10-03 08:00:00.000
+*/
+--for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_EMPLOYEE;
+    --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_EMPLOYEE
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute OR SCHEDULE = 'USING CRON 0 0 * * * UTC'
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_EMPLOYEE;
+/*
+Task TRUNCATE_STAGE_EMPLOYEE successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_EMPLOYEE RESUME;
+/*
+Statement executed successfully.
+*/
+select * from RETAIL_DB.RETAIL_STG.STG_EMPLOYEE; 
+
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.MERGE_EMPLOYEE_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_EMPLOYEE SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+                            -----sucessfuly Loaded All Codes----
+                            
+
+--create stage TRANSACTION
+CREATE OR REPLACE STAGE RETAIL_STG.TRANSACTION_STAGE
+URL='s3://deproject3buckets/Transaction_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area TRANSACTION_STAGE successfully created.
+*/
+--verify stage
+LIST @RETAIL_DB.RETAIL_STG.TRANSACTION_STAGE;
+/*
+s3://de.project.3.public.bucket/Transaction_data/transaction_day1.csv	285	5e2375a3c53b5ad3bf505f3c5884b91e	Wed, 21 May 2025 16:46:13 GMT
+s3://de.project.3.public.bucket/Transaction_data/transaction_day2.csv	278	06114ab3147cc56ee4b8d8b84149393f	Wed, 21 May 2025 16:46:12 GMT
+s3://de.project.3.public.bucket/Transaction_data/transaction_day3.csv	287	3c42f53738e7439201055de8f33b68d7	Wed, 21 May 2025 16:46:11 GMT
+*/
+-- Transaction staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_TRANSACTION (
+    transaction_id INTEGER,
+    customer_id INTEGER,
+    store_id INTEGER,
+    transaction_date DATE,
+    transaction_time TIME,
+    total_amount NUMBER(10,2),
+    payment_method VARCHAR,
+    employee_id INTEGER,
+    update_timestamp TIMESTAMP_NTZ
+);
+
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_TRANSACTION (
+    transaction_id INTEGER PRIMARY KEY,
+    customer_id INTEGER,
+    store_id INTEGER,
+    transaction_date DATE,
+    transaction_time TIME,
+    total_amount NUMBER(10,2),
+    payment_method VARCHAR,
+    employee_id INTEGER,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_TRANSACTION successfully created.
+*/
+
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.TRANSACTION_PIPE
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_TRANSACTION FROM
+@RETAIL_DB.RETAIL_STG.TRANSACTION_STAGE ;
+/*
+Pipe TRANSACTION_PIPE successfully created.
+*/
+
+DESC pipe RETAIL_DB.PIPES.TRANSACTION_PIPE;
+/*
+2025-05-26 00:18:33.979 -0700	TRANSACTION_PIPE	RETAIL_DB	PIPES	COPY INTO RETAIL_DB.RETAIL_STG.STG_TRANSACTION FROM
+@RETAIL_DB.RETAIL_STG.TRANSACTION_STAGE	ACCOUNTADMIN						ROLE		STAGE
+*/
+--refresh pipe
+ALTER PIPE RETAIL_DB.PIPES.TRANSACTION_PIPE REFRESH;
+/*
+transaction_day1.csv	SENT
+transaction_day2.csv	SENT
+transaction_day3.csv	SENT
+*/
+--verify pipe status
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.TRANSACTION_PIPE');
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_TRANSACTION;
+/*
+5001	1001	4001	2023-10-01	10:15:00	1199.98	Credit Card	5001	2023-10-01 10:15:00.000
+5002	1002	4002	2023-10-01	14:30:00	799.99	Debit Card	5002	2023-10-01 14:30:00.000
+5003	1003	4001	2023-10-02	11:20:00	199.99	Cash	5003	2023-10-02 11:20:00.000
+5004	1004	4002	2023-10-02	16:45:00	1299.98	Debit Card	5002	2023-10-02 16:45:00.000
+5005	1005	4003	2023-10-03	13:10:00	699.98	Credit Card	5005	2023-10-03 13:10:00.000
+5006	1001	4001	2023-10-03	17:30:00	499.99	Debit Card	5003	2023-10-03 17:30:00.000
+*/
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.pipes.RETAIL_CUSTOMER_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+
+--create task
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.MERGE_TRANSACTION_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute OR SCHEDULE = '1 MINUTE'
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_TRANSACTION AS TARGET
+USING (
+    SELECT * FROM RETAIL_DB.RETAIL_STG.STG_TRANSACTION
+) AS SOURCE
+ON TARGET.transaction_id = SOURCE.transaction_id
+
+WHEN MATCHED AND (
+    TARGET.update_timestamp < SOURCE.update_timestamp
+) THEN UPDATE SET
+    customer_id = SOURCE.customer_id,
+    store_id = SOURCE.store_id,
+    transaction_date = SOURCE.transaction_date,
+    transaction_time = SOURCE.transaction_time,
+    total_amount = SOURCE.total_amount,
+    payment_method = SOURCE.payment_method,
+    employee_id = SOURCE.employee_id,
+    update_timestamp = SOURCE.update_timestamp
+
+WHEN NOT MATCHED THEN INSERT (
+    transaction_id,
+    customer_id,
+    store_id,
+    transaction_date,
+    transaction_time,
+    total_amount,
+    payment_method,
+    employee_id,
+    update_timestamp
+) VALUES (
+    SOURCE.transaction_id,
+    SOURCE.customer_id,
+    SOURCE.store_id,
+    SOURCE.transaction_date,
+    SOURCE.transaction_time,
+    SOURCE.total_amount,
+    SOURCE.payment_method,
+    SOURCE.employee_id,
+    SOURCE.update_timestamp
+);
+/*
+Task MERGE_TRANSACTION_TASK successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.MERGE_TRANSACTION_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+show tasks;
+--check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_TRANSACTION;
+/*
+5001	1001	4001	2023-10-01	10:15:00	1199.98	Credit Card	5001	2023-10-01 10:15:00.000
+5002	1002	4002	2023-10-01	14:30:00	799.99	Debit Card	5002	2023-10-01 14:30:00.000
+5003	1003	4001	2023-10-02	11:20:00	199.99	Cash	5003	2023-10-02 11:20:00.000
+5004	1004	4002	2023-10-02	16:45:00	1299.98	Debit Card	5002	2023-10-02 16:45:00.000
+5005	1005	4003	2023-10-03	13:10:00	699.98	Credit Card	5005	2023-10-03 13:10:00.000
+5006	1001	4001	2023-10-03	17:30:00	499.99	Debit Card	5003	2023-10-03 17:30:00.000
+*/
+
+--for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_TRANSACTION;
+   --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_TRANSACTION
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute OR SCHEDULE = 'USING CRON 0 0 * * * UTC'
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_TRANSACTION;   
+/*
+Statement executed successfully.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_TRANSACTION RESUME;
+/*
+Statement executed successfully.
+*/
+--check stage table
+SELECT * FROM RETAIL_DB.RETAIL_STG.STG_TRANSACTION;
+
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.MERGE_TRANSACTION_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_TRANSACTION SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+                                -----sucessfuly Loaded All Codes----
+
+
+--create stage TRANSACTION_ITEMS
+CREATE OR REPLACE STAGE RETAIL_STG.TRANSACTION_ITEMS_STAGE
+URL='s3://deproject3buckets/Transaction_items_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area TRANSACTION_ITEMS_STAGE successfully created.
+*/
+--verify stage
+LIST @RETAIL_DB.RETAIL_STG.TRANSACTION_ITEMS_STAGE;
+/*
+s3://de.project.3.public.bucket/Transaction_items_data/transaction_items_day1.csv	270	f0bcb85425c903f91af7113aa03d352c	Wed, 21 May 2025 16:48:05 GMT
+s3://de.project.3.public.bucket/Transaction_items_data/transaction_items_day2.csv	270	6fd5e12094f87c378666ae4bb4e0466a	Wed, 21 May 2025 16:48:05 GMT
+s3://de.project.3.public.bucket/Transaction_items_data/transaction_items_day3.csv	225	c9c0bb4830477014a8d0ecfba37d4fa8	Wed, 21 May 2025 16:48:06 GMT
+*/
+-- Transaction items staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS (
+    transaction_item_id INTEGER,
+    transaction_id INTEGER,
+    product_id INTEGER,
+    quantity INTEGER,
+    unit_price NUMBER(10,2),
+    discount_amount NUMBER(10,2),
+    tax_amount NUMBER(10,2),
+    update_timestamp TIMESTAMP_NTZ
+);
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_TRANSACTION_ITEMS (
+    transaction_item_id INTEGER PRIMARY KEY,
+    transaction_id INTEGER,
+    product_id INTEGER,
+    quantity INTEGER,
+    unit_price NUMBER(10,2),
+    discount_amount NUMBER(10,2),
+    tax_amount NUMBER(10,2),
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_TRANSACTION_ITEMS successfully created.
+*/
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.TRANSACTION_ITEMS_PIPE
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS FROM
+@RETAIL_DB.RETAIL_STG.TRANSACTION_ITEMS_STAGE ;
+/*
+Pipe TRANSACTION_ITEMS_PIPE successfully created.
+*/
+DESC pipe RETAIL_DB.PIPES.TRANSACTION_ITEMS_PIPE;
+----refresh pipe
+ALTER PIPE RETAIL_DB.PIPES.TRANSACTION_ITEMS_PIPE REFRESH;
+/*
+transaction_items_day1.csv	SENT
+transaction_items_day2.csv	SENT
+transaction_items_day3.csv	SENT
+*/
+--verify pipe status
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.TRANSACTION_ITEMS_PIPE');
+
+--check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS;
+/*
+6001	5001	2001	1	999.99	0.00	100.00	2023-10-01 10:15:00.000
+6002	5001	2003	1	199.99	0.00	20.00	2023-10-01 10:15:00.000
+6003	5002	2002	1	799.99	0.00	80.00	2023-10-01 14:30:00.000
+6004	5003	2003	1	199.99	0.00	20.00	2023-10-02 11:20:00.000
+6005	5004	2001	1	999.99	0.00	100.00	2023-10-02 16:45:00.000
+6006	5004	2004	1	499.99	0.00	50.00	2023-10-02 16:45:00.000
+6007	5005	2002	1	799.99	100.00	70.00	2023-10-03 13:10:00.000
+6008	5006	2004	1	499.99	0.00	50.00	2023-10-03 17:30:00.000
+*/
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.PIPES.TRANSACTION_ITEMS_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+
+--CREATE TASK
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.MERGE_TRANSACTION_ITEMS_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute OR SCHEDULE = '1 MINUTE'
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_TRANSACTION_ITEMS AS TARGET
+USING (
+    SELECT * FROM RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS
+) AS SOURCE
+ON TARGET.transaction_item_id = SOURCE.transaction_item_id
+
+WHEN MATCHED AND (
+    TARGET.update_timestamp < SOURCE.update_timestamp
+) THEN UPDATE SET
+    transaction_id = SOURCE.transaction_id,
+    product_id = SOURCE.product_id,
+    quantity = SOURCE.quantity,
+    unit_price = SOURCE.unit_price,
+    discount_amount = SOURCE.discount_amount,
+    tax_amount = SOURCE.tax_amount,
+    update_timestamp = SOURCE.update_timestamp
+
+WHEN NOT MATCHED THEN INSERT (
+    transaction_item_id,
+    transaction_id,
+    product_id,
+    quantity,
+    unit_price,
+    discount_amount,
+    tax_amount,
+    update_timestamp
+) VALUES (
+    SOURCE.transaction_item_id,
+    SOURCE.transaction_id,
+    SOURCE.product_id,
+    SOURCE.quantity,
+    SOURCE.unit_price,
+    SOURCE.discount_amount,
+    SOURCE.tax_amount,
+    SOURCE.update_timestamp
+);
+/*
+Task MERGE_TRANSACTION_ITEMS_TASK successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.MERGE_TRANSACTION_ITEMS_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+show tasks;
+--check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_TRANSACTION_ITEMS;
+/*
+6001	5001	2001	1	999.99	0.00	100.00	2023-10-01 10:15:00.000
+6002	5001	2003	1	199.99	0.00	20.00	2023-10-01 10:15:00.000
+6003	5002	2002	1	799.99	0.00	80.00	2023-10-01 14:30:00.000
+6004	5003	2003	1	199.99	0.00	20.00	2023-10-02 11:20:00.000
+6005	5004	2001	1	999.99	0.00	100.00	2023-10-02 16:45:00.000
+6006	5004	2004	1	499.99	0.00	50.00	2023-10-02 16:45:00.000
+6007	5005	2002	1	799.99	100.00	70.00	2023-10-03 13:10:00.000
+6008	5006	2004	1	499.99	0.00	50.00	2023-10-03 17:30:00.000
+*/
+
+--for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS;
+    --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_TRANSACTION_ITEMS
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute OR SCHEDULE = 'USING CRON 0 0 * * * UTC'
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS;   
+/*
+Task TRUNCATE_STAGE_TRANSACTION_ITEMS successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_TRANSACTION_ITEMS RESUME;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+--check stage table
+SELECT * FROM RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS;
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.MERGE_TRANSACTION_ITEMS_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_TRANSACTION_ITEMS SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+                                    -----sucessfuly Loaded All Codes----
+                                    
+
+--create INVENTORY_STAGE
+CREATE OR REPLACE STAGE RETAIL_STG.INVENTORY_STAGE
+URL='s3://deproject3buckets/inventory_data/' STORAGE_INTEGRATION = s3_retail_db_int FILE_FORMAT = RETAIL_DB.file_formats.csv_fileformat;
+/*
+Stage area INVENTORY_STAGE successfully created.
+*/
+--verify stages
+LIST @RETAIL_DB.RETAIL_STG.INVENTORY_STAGE;
+/*
+s3://de.project.3.public.bucket/Inventory_data/inventory_day1.csv	361	bfcdecf5c23c04358307117fc4c4a0d8	Wed, 21 May 2025 16:42:31 GMT
+s3://de.project.3.public.bucket/Inventory_data/inventory_day2.csv	257	691b04a6a1c1a28c1ffa2056bbf382ee	Wed, 21 May 2025 16:42:32 GMT
+s3://de.project.3.public.bucket/Inventory_data/inventory_day3.csv	309	e830fb6564476f7522336f2531ad9f0c	Wed, 21 May 2025 16:42:33 GMT
+*/
+-- Inventory staging
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_STG.STG_INVENTORY (
+    inventory_id INTEGER,
+    product_id INTEGER,
+    store_id INTEGER,
+    stock_quantity INTEGER,
+    reorder_level INTEGER,
+    last_restock_date DATE,
+    update_timestamp TIMESTAMP_NTZ
+);
+--core inventory
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_CORE.CORE_INVENTORY (
+    inventory_id INTEGER PRIMARY KEY,
+    product_id INTEGER,
+    store_id INTEGER,
+    stock_quantity INTEGER,
+    reorder_level INTEGER,
+    last_restock_date DATE,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table CORE_INVENTORY successfully created.
+*/
+--create pipe
+CREATE OR REPLACE PIPE RETAIL_DB.PIPES.INVENTORY_PIPE
+AS COPY INTO RETAIL_DB.RETAIL_STG.STG_INVENTORY FROM @RETAIL_DB.RETAIL_STG.INVENTORY_STAGE ;
+/*
+Pipe INVENTORY_PIPE successfully created.
+*/
+DESC pipe RETAIL_DB.PIPES.INVENTORY_PIPE;
+--refresh pipe
+ALTER PIPE RETAIL_DB.PIPES.INVENTORY_PIPE REFRESH;
+/*
+inventory_day1.csv	SENT
+inventory_day2.csv	SENT
+inventory_day3.csv	SENT
+*/
+----Check pipe status
+SELECT SYSTEM$PIPE_STATUS('RETAIL_DB.PIPES.INVENTORY_PIPE');
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'RETAIL_DB.PIPES.INVENTORY_PIPE',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+---check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_INVENTORY;
+/*
+7001	2001	4001	15	5	2023-09-28	2023-10-01 08:00:00.000
+7002	2002	4001	25	10	2023-09-28	2023-10-01 08:00:00.000
+7003	2003	4001	40	15	2023-09-28	2023-10-01 08:00:00.000
+7004	2001	4002	10	5	2023-09-29	2023-10-01 08:00:00.000
+7005	2002	4002	20	10	2023-09-29	2023-10-01 08:00:00.000
+7006	2004	4001	30	10	2023-10-01	2023-10-02 08:00:00.000
+7007	2004	4002	25	10	2023-10-01	2023-10-02 08:00:00.000
+7008	2003	4002	35	15	2023-09-30	2023-10-02 08:00:00.000
+7009	2001	4003	12	5	2023-10-02	2023-10-03 08:00:00.000
+7010	2002	4003	18	10	2023-10-02	2023-10-03 08:00:00.000
+7011	2003	4003	30	15	2023-10-02	2023-10-03 08:00:00.000
+7012	2004	4003	20	10	2023-10-02	2023-10-03 08:00:00.000
+*/    
+
+--CREATE TASK
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.MERGE_INVENTORY_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON * * * * * UTC'  --Run every minute OR SCHEDULE = '1 minute'
+AS
+MERGE INTO RETAIL_DB.RETAIL_CORE.CORE_INVENTORY AS CORE
+USING (
+    SELECT *
+    FROM RETAIL_DB.RETAIL_STG.STG_INVENTORY
+) AS STG
+ON CORE.inventory_id = STG.inventory_id
+WHEN MATCHED AND (
+       CORE.stock_quantity != STG.stock_quantity
+    OR CORE.reorder_level  != STG.reorder_level
+    OR CORE.last_restock_date != STG.last_restock_date
+    OR CORE.update_timestamp != STG.update_timestamp
+) THEN UPDATE SET
+    product_id        = STG.product_id,
+    store_id          = STG.store_id,
+    stock_quantity    = STG.stock_quantity,
+    reorder_level     = STG.reorder_level,
+    last_restock_date = STG.last_restock_date,
+    update_timestamp  = STG.update_timestamp
+WHEN NOT MATCHED THEN INSERT (
+    inventory_id, product_id, store_id, stock_quantity,
+    reorder_level, last_restock_date, update_timestamp
+) VALUES (
+    STG.inventory_id, STG.product_id, STG.store_id, STG.stock_quantity,
+    STG.reorder_level, STG.last_restock_date, STG.update_timestamp
+);
+/*
+Task MERGE_INVENTORY_TASK successfully created.
+*/
+
+ALTER TASK RETAIL_DB.TASKS.MERGE_INVENTORY_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+show tasks;
+
+---check core table data
+SELECT * FROM RETAIL_DB.RETAIL_CORE.CORE_INVENTORY;
+/*
+6001	5001	2001	1	999.99	0.00	100.00	2023-10-01 10:15:00.000
+6002	5001	2003	1	199.99	0.00	20.00	2023-10-01 10:15:00.000
+6003	5002	2002	1	799.99	0.00	80.00	2023-10-01 14:30:00.000
+6004	5003	2003	1	199.99	0.00	20.00	2023-10-02 11:20:00.000
+6005	5004	2001	1	999.99	0.00	100.00	2023-10-02 16:45:00.000
+6006	5004	2004	1	499.99	0.00	50.00	2023-10-02 16:45:00.000
+6007	5005	2002	1	799.99	100.00	70.00	2023-10-03 13:10:00.000
+6008	5006	2004	1	499.99	0.00	50.00	2023-10-03 17:30:00.000
+*/
+
+---for refresh stage table
+TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_INVENTORY;
+  --OR
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_INVENTORY
+  WAREHOUSE = COMPUTE_WH
+  SCHEDULE = 'USING CRON */2 * * * * UTC' --Run every 2minute OR SCHEDULE = 'USING CRON 0 0 * * * UTC'
+AS
+  TRUNCATE TABLE RETAIL_DB.RETAIL_STG.STG_INVENTORY;  
+/*
+Statement executed successfully.
+*/
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_INVENTORY RESUME;
+SHOW TASKS;
+/*
+Statement executed successfully.
+*/
+---check stage table data
+select * from RETAIL_DB.RETAIL_STG.STG_INVENTORY;
+---task suspend
+ALTER TASK RETAIL_DB.TASKS.MERGE_INVENTORY_TASK SUSPEND;
+ALTER TASK RETAIL_DB.TASKS.TRUNCATE_STAGE_INVENTORY SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+                                    -----sucessfuly Loaded All Codes-----
+
+Fact Tables:
+------------
+-- Sales fact table
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_FACT.FACT_SALES (
+    sales_key INTEGER AUTOINCREMENT START 1 INCREMENT 1,
+    transaction_id INTEGER,
+    customer_key INTEGER,
+    store_key INTEGER,
+    product_key INTEGER,
+    employee_key INTEGER,
+    transaction_date DATE,
+    transaction_time TIME,
+    quantity INTEGER,
+    unit_price NUMBER(10,2),
+    discount_amount NUMBER(10,2),
+    tax_amount NUMBER(10,2),
+    total_amount NUMBER(10,2),
+    payment_method STRING,
+    update_timestamp TIMESTAMP_NTZ
+);
+/*
+Table FACT_SALES successfully created.
+*/
+----create LOAD_FACT_SALES_TASK
+CREATE OR REPLACE TASK LOAD_FACT_SALES_TASK
+WAREHOUSE = COMPUTE_WH  -- Replace with your Snowflake virtual warehouse
+SCHEDULE = '1 MINUTE' --OR SCHEDULE = 'USING CRON 10 0 * * * UTC' --Runs every day at 05:40 AM IST (Daily)--OR 
+AS
+INSERT INTO RETAIL_DB.RETAIL_FACT.FACT_SALES (
+    transaction_id, customer_key, store_key, product_key, employee_key,
+    transaction_date, transaction_time, quantity, unit_price, discount_amount,
+    tax_amount, total_amount, payment_method, update_timestamp
+)
+SELECT 
+    ti.transaction_id,
+    dc.customer_key,
+    ds.store_key,
+    dp.product_key,
+    de.employee_key,
+    t.transaction_date,
+    t.transaction_time,
+    ti.quantity,
+    ti.unit_price,
+    ti.discount_amount,
+    ti.tax_amount,
+    ti.quantity * ti.unit_price + ti.tax_amount - ti.discount_amount AS total_amount,
+    t.payment_method,
+    t.update_timestamp
+FROM RETAIL_DB.RETAIL_STG.STG_TRANSACTION_ITEMS ti
+JOIN RETAIL_DB.RETAIL_STG.STG_TRANSACTION t ON ti.transaction_id = t.transaction_id
+JOIN RETAIL_DB.RETAIL_CORE.CORE_CUSTOMER dc ON t.customer_id = dc.customer_id AND dc.current_flag = TRUE
+JOIN RETAIL_DB.RETAIL_CORE.CORE_STORE ds ON t.store_id = ds.store_id AND ds.current_flag = TRUE
+JOIN RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS dp ON ti.product_id = dp.product_id AND dp.current_flag = TRUE
+JOIN RETAIL_DB.RETAIL_CORE.CORE_EMPLOYEE de ON t.employee_id = de.employee_id AND de.current_flag = TRUE
+WHERE NOT EXISTS (
+    SELECT 1 FROM RETAIL_DB.RETAIL_FACT.FACT_SALES fs 
+    WHERE fs.transaction_id = ti.transaction_id 
+    AND fs.product_key = dp.product_key
+);
+/*
+Task LOAD_FACT_SALES_TASK successfully created.
+*/
+----Enable the task
+ALTER TASK RETAIL_DB.TASKS.LOAD_FACT_SALES_TASK RESUME;
+/*
+Statement executed successfully.
+*/
+show tasks;
+
+SELECT *
+FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+    TASK_NAME => 'RETAIL_DB.TASKS.LOAD_FACT_SALES_TASK',
+    RESULT_LIMIT => 5
+));
+
+SELECT * FROM RETAIL_DB.RETAIL_FACT.FACT_SALES; 
+/*
+1	5001	1	1	1	1	2023-10-01	10:15:00	1	999.99	0.00	100.00	1099.99	Credit Card	2023-10-01 10:15:00.000
+2	5001	1	1	3	1	2023-10-01	10:15:00	1	199.99	0.00	20.00	219.99	Credit Card	2023-10-01 10:15:00.000
+3	5002	2	2	2	2	2023-10-01	14:30:00	1	799.99	0.00	80.00	879.99	Debit Card	2023-10-01 14:30:00.000
+4	5003	3	1	3	3	2023-10-02	11:20:00	1	199.99	0.00	20.00	219.99	Cash	2023-10-02 11:20:00.000
+5	5004	4	2	1	2	2023-10-02	16:45:00	1	999.99	0.00	100.00	1099.99	Debit Card	2023-10-02 16:45:00.000
+6	5004	4	2	4	2	2023-10-02	16:45:00	1	499.99	0.00	50.00	549.99	Debit Card	2023-10-02 16:45:00.000
+7	5005	5	3	2	5	2023-10-03	13:10:00	1	799.99	100.00	70.00	769.99	Credit Card	2023-10-03 13:10:00.000
+8	5006	1	1	4	3	2023-10-03	17:30:00	1	499.99	0.00	50.00	549.99	Debit Card	2023-10-03 17:30:00.000
+*/
+ALTER TASK RETAIL_DB.TASKS.LOAD_FACT_SALES_TASK SUSPEND;
+
+-----sales_performance_daily table
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_AGG.SALES_PERFORMANCE_DAILY AS
+SELECT
+    cs.store_id,
+    cs.store_name,
+    cs.city,
+    cs.state,
+    fs.transaction_date,
+    COUNT(DISTINCT fs.transaction_id) AS total_transactions,
+    SUM(fs.total_amount) AS total_sales,
+    SUM(fs.quantity) AS total_units_sold,
+    SUM(fs.quantity * (cp.price - cp.cost)) AS gross_profit
+FROM RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+JOIN RETAIL_DB.RETAIL_CORE.CORE_STORE cs 
+    ON fs.store_key = cs.store_key AND cs.current_flag = TRUE
+JOIN RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS cp 
+    ON fs.product_key = cp.product_key AND cp.current_flag = TRUE
+GROUP BY 
+    cs.store_id, cs.store_name, cs.city, cs.state, fs.transaction_date;
+/*
+Table SALES_PERFORMANCE_DAILY successfully created.
+*/
+---create LOAD_SALES_PERFORMANCE_DAILY_TASK    
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.LOAD_SALES_PERFORMANCE_DAILY_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '1 MINUTE' --ORSCHEDULE = 'USING CRON 30 0 * * * UTC'  --Runs every day at 06:00 AM IST (Daily)--OR 
+AS
+BEGIN
+    DELETE FROM RETAIL_DB.RETAIL_AGG.SALES_PERFORMANCE_DAILY;
+
+    INSERT INTO RETAIL_DB.RETAIL_AGG.SALES_PERFORMANCE_DAILY
+    SELECT
+        cs.store_id,
+        cs.store_name,
+        cs.city,
+        cs.state,
+        fs.transaction_date,
+        COUNT(DISTINCT fs.transaction_id) AS total_transactions,
+        SUM(fs.total_amount) AS total_sales,
+        SUM(fs.quantity) AS total_units_sold,
+        SUM(fs.quantity * (cp.price - cp.cost)) AS gross_profit
+    FROM RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+    JOIN RETAIL_DB.RETAIL_CORE.CORE_STORE cs 
+        ON fs.store_key = cs.store_key AND cs.current_flag = TRUE
+    JOIN RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS cp 
+        ON fs.product_key = cp.product_key AND cp.current_flag = TRUE
+    GROUP BY 
+        cs.store_id, cs.store_name, cs.city, cs.state, fs.transaction_date;
+END;
+
+/*
+Task LOAD_SALES_PERFORMANCE_DAILY_TASK successfully created.
+*/
+------refresh task
+ALTER TASK RETAIL_DB.TASKS.LOAD_SALES_PERFORMANCE_DAILY_TASK RESUME;
+SHOW TASKS;
+--check CUSTOMER_SEGMENTATION
+SELECT * FROM RETAIL_DB.RETAIL_AGG.SALES_PERFORMANCE_DAILY;
+/*
+4001	Main Store	Chicago	IL	2023-10-01	1	1319.98	2	379.98
+4002	Downtown Store	New York	NY	2023-10-01	1	879.99	1	249.99
+4001	Main Store	Chicago	IL	2023-10-02	1	219.99	1	79.99
+4002	Downtown Store	New York	NY	2023-10-02	1	1649.98	2	449.98
+4003	Mall Store	LosAngeles	CA	2023-10-03	1	769.99	1	249.99
+4001	Main Store	Chicago	IL	2023-10-03	1	549.99	1	149.99
+*/
+ALTER TASK RETAIL_DB.TASKS.LOAD_SALES_PERFORMANCE_DAILY_TASK SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS; 
+
+
+----create CUSTOMER_SEGMENTATION                                    
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_AGG.CUSTOMER_SEGMENTATION AS
+SELECT
+    cc.customer_id,
+    cc.first_name || ' ' || cc.last_name AS customer_name,
+    cc.segment,
+    COUNT(DISTINCT fs.transaction_id) AS purchase_count,
+    SUM(fs.total_amount) AS lifetime_value,
+    DATEDIFF('day', MIN(fs.transaction_date), CURRENT_DATE()) AS days_since_first_purchase,
+    SUM(CASE 
+            WHEN fs.transaction_date >= DATEADD('day', -30, CURRENT_DATE()) 
+            THEN fs.total_amount 
+            ELSE 0 
+        END) AS sales_last_30_days
+FROM 
+    RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+JOIN 
+    RETAIL_DB.RETAIL_CORE.CORE_CUSTOMER cc
+    ON fs.customer_key = cc.customer_key
+GROUP BY 
+    cc.customer_id, cc.first_name, cc.last_name, cc.segment;
+
+----Run this only once to create the table
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_AGG.CUSTOMER_SEGMENTATION (
+    customer_id STRING,
+    customer_name STRING,
+    segment STRING,
+    purchase_count NUMBER,
+    lifetime_value NUMBER(10,2),
+    days_since_first_purchase INTEGER,
+    sales_last_30_days NUMBER(10,2)
+);
+----create LOAD_CUSTOMER_SEGMENTATION_TASK
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.LOAD_CUSTOMER_SEGMENTATION_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '1 MINUTE'
+AS
+BEGIN
+    DELETE FROM RETAIL_DB.RETAIL_AGG.CUSTOMER_SEGMENTATION;
+
+    INSERT INTO RETAIL_DB.RETAIL_AGG.CUSTOMER_SEGMENTATION (
+        customer_id,
+        customer_name,
+        segment,
+        purchase_count,
+        lifetime_value,
+        days_since_first_purchase,
+        sales_last_30_days
+    )
+    SELECT
+        cc.customer_id,
+        cc.first_name || ' ' || cc.last_name AS customer_name,
+        cc.segment,
+        COUNT(DISTINCT fs.transaction_id) AS purchase_count,
+        SUM(fs.total_amount) AS lifetime_value,
+        DATEDIFF('day', MIN(fs.transaction_date), CURRENT_DATE()) AS days_since_first_purchase,
+        SUM(CASE 
+                WHEN fs.transaction_date >= DATEADD('day', -30, CURRENT_DATE()) 
+                THEN fs.total_amount 
+                ELSE 0 
+            END) AS sales_last_30_days
+    FROM 
+        RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+    JOIN 
+        RETAIL_DB.RETAIL_CORE.CORE_CUSTOMER cc
+        ON fs.customer_key = cc.customer_key
+    GROUP BY 
+        cc.customer_id, cc.first_name, cc.last_name, cc.segment;
+END;
+------refresh task
+ALTER TASK RETAIL_DB.TASKS.LOAD_CUSTOMER_SEGMENTATION_TASK RESUME;
+SHOW TASKS;
+--check CUSTOMER_SEGMENTATION
+SELECT * FROM RETAIL_DB.RETAIL_AGG.CUSTOMER_SEGMENTATION;
+/*
+1001	John Smith	Premium	2	1869.97	603	0.00
+1002	Jane Doe	Standard	1	879.99	603	0.00
+1003	Robert Johnson	Standard	1	219.99	602	0.00
+1004	Emily Davis	Premium	1	1649.98	602	0.00
+1005	Daniel Wilson	Standard	1	769.99	601	0.00
+*/
+ALTER TASK RETAIL_DB.TASKS.LOAD_CUSTOMER_SEGMENTATION_TASK SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;                   
+
+
+---------product_performance
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_AGG.PRODUCT_PERFORMANCE AS
+SELECT
+    cp.product_id,
+    cp.product_name,
+    cp.category,
+    cp.brand,
+    SUM(fs.quantity) AS total_units_sold,
+    SUM(fs.total_amount) AS total_revenue,
+    SUM(fs.quantity * (cp.price - cp.cost)) AS total_profit,
+    -- Calculate margin after total_profit is computed
+    (SUM(fs.quantity * (cp.price - cp.cost)) / NULLIF(SUM(fs.total_amount), 0)) * 100 AS profit_margin_pct,
+    RANK() OVER(PARTITION BY cp.category ORDER BY SUM(fs.total_amount) DESC) AS category_rank
+FROM 
+    RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+JOIN 
+    RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS cp
+    ON fs.product_key = cp.product_key
+GROUP BY 
+    cp.product_id, cp.product_name, cp.category, cp.brand;
+
+
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.LOAD_PRODUCT_PERFORMANCE_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '1 MINUTE'
+AS
+BEGIN
+    DELETE FROM RETAIL_DB.RETAIL_AGG.PRODUCT_PERFORMANCE;
+
+    INSERT INTO RETAIL_DB.RETAIL_AGG.PRODUCT_PERFORMANCE
+    SELECT
+        cp.product_id,
+        cp.product_name,
+        cp.category,
+        cp.brand,
+        SUM(fs.quantity) AS total_units_sold,
+        SUM(fs.total_amount) AS total_revenue,
+        SUM(fs.quantity * (cp.price - cp.cost)) AS total_profit,
+        (SUM(fs.quantity * (cp.price - cp.cost)) / NULLIF(SUM(fs.total_amount), 0)) * 100 AS profit_margin_pct,
+        RANK() OVER(PARTITION BY cp.category ORDER BY SUM(fs.total_amount) DESC) AS category_rank
+    FROM 
+        RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+    JOIN 
+        RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS cp
+        ON fs.product_key = cp.product_key
+    GROUP BY 
+        cp.product_id, cp.product_name, cp.category, cp.brand;
+END;
+
+ALTER TASK RETAIL_DB.TASKS.LOAD_PRODUCT_PERFORMANCE_TASK RESUME;
+SHOW TASKS;
+
+SELECT * FROM RETAIL_DB.RETAIL_AGG.PRODUCT_PERFORMANCE;
+/*
+2001	Laptop	Electronics	Dell	2	2199.98	599.98	27.27206600	1
+2002	Smartphone	Electronics	Samsung	2	1649.98	499.98	30.30218500	2
+2004	Tablet	Electronics	Apple	2	1099.98	299.98	27.27140500	3
+2003	Headphones	Electronics	Sony	2	439.98	159.98	36.36074400	4
+*/
+ALTER TASK RETAIL_DB.TASKS.LOAD_PRODUCT_PERFORMANCE_TASK SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+
+---Inventory_health
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_AGG.INVENTORY_HEALTH (
+    product_id INTEGER,
+    product_name VARCHAR,
+    store_id INTEGER,
+    store_name VARCHAR,
+    stock_quantity INTEGER,
+    reorder_level INTEGER,
+    units_sold_7d INTEGER,
+    stock_status STRING
+);
+
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TASK_INVENTORY_HEALTH
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '1 MINUTE'
+AS
+INSERT OVERWRITE INTO RETAIL_DB.RETAIL_AGG.INVENTORY_HEALTH
+SELECT
+    ci.product_id,
+    cp.product_name,
+    ci.store_id,
+    cs.store_name,
+    ci.stock_quantity,
+    ci.reorder_level,
+    COALESCE(SUM(CASE 
+        WHEN fs.transaction_date >= DATEADD(DAY, -7, CURRENT_DATE())
+        THEN fs.quantity
+        ELSE 0
+    END), 0) AS units_sold_7d,
+    CASE
+        WHEN ci.stock_quantity <= ci.reorder_level THEN 'Reorder Now'
+        WHEN ci.stock_quantity <= ci.reorder_level * 1.5 THEN 'Monitor Closely'
+        ELSE 'Sufficient Stock'
+    END AS stock_status
+FROM RETAIL_DB.RETAIL_CORE.CORE_INVENTORY ci
+JOIN RETAIL_DB.RETAIL_CORE.CORE_PRODUCTS cp 
+    ON ci.product_id = cp.product_id AND cp.current_flag = TRUE
+JOIN RETAIL_DB.RETAIL_CORE.CORE_STORE cs 
+    ON ci.store_id = cs.store_id AND cs.current_flag = TRUE
+LEFT JOIN RETAIL_DB.RETAIL_FACT.FACT_SALES fs 
+    ON fs.product_key = cp.product_key 
+    AND fs.store_key = cs.store_key 
+    AND fs.transaction_date >= DATEADD(DAY, -7, CURRENT_DATE())
+GROUP BY 
+    ci.product_id, cp.product_name,
+    ci.store_id, cs.store_name,
+    ci.stock_quantity, ci.reorder_level;
+
+/*
+Task TASK_INVENTORY_HEALTH successfully created.
+*/
+ALTER TASK RETAIL_DB.TASKS.TASK_INVENTORY_HEALTH RESUME;
+SHOW TASKS;
+
+SELECT * FROM RETAIL_DB.RETAIL_AGG.INVENTORY_HEALTH;
+/*
+2001	Laptop	4001	Main Store	15	5	0	Sufficient Stock
+2002	Smartphone	4001	Main Store	25	10	0	Sufficient Stock
+2003	Headphones	4001	Main Store	40	15	0	Sufficient Stock
+2001	Laptop	4002	Downtown Store	10	5	0	Sufficient Stock
+2002	Smartphone	4002	Downtown Store	20	10	0	Sufficient Stock
+2004	Tablet	4001	Main Store	30	10	0	Sufficient Stock
+2004	Tablet	4002	Downtown Store	25	10	0	Sufficient Stock
+2003	Headphones	4002	Downtown Store	35	15	0	Sufficient Stock
+2001	Laptop	4003	Mall Store	12	5	0	Sufficient Stock
+2002	Smartphone	4003	Mall Store	18	10	0	Sufficient Stock
+2003	Headphones	4003	Mall Store	30	15	0	Sufficient Stock
+2004	Tablet	4003	Mall Store	20	10	0	Sufficient Stock
+*/
+ALTER TASK RETAIL_DB.TASKS.TASK_INVENTORY_HEALTH SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+
+-----employee_sales_performance
+CREATE OR REPLACE TABLE RETAIL_DB.RETAIL_AGG.EMPLOYEE_SALES_PERFORMANCE (
+    employee_id INTEGER,
+    employee_name STRING,
+    position STRING,
+    store_name STRING,
+    transactions_processed INTEGER,
+    total_sales NUMBER(10,2),
+    avg_transaction_value NUMBER(10,2),
+    store_rank INTEGER
+);
+/*
+Table EMPLOYEE_SALES_PERFORMANCE successfully created.
+*/
+
+CREATE OR REPLACE TASK RETAIL_DB.TASKS.TASK_EMPLOYEE_SALES_PERFORMANCE
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '1 MINUTE'
+AS
+INSERT OVERWRITE INTO RETAIL_DB.RETAIL_AGG.EMPLOYEE_SALES_PERFORMANCE
+SELECT
+    ce.employee_id,
+    ce.first_name || ' ' || ce.last_name AS employee_name,
+    ce.position,
+    cs.store_name,
+    COUNT(DISTINCT fs.transaction_id) AS transactions_processed,
+    SUM(fs.total_amount) AS total_sales,
+    AVG(fs.total_amount) AS avg_transaction_value,
+    RANK() OVER(PARTITION BY cs.store_id ORDER BY SUM(fs.total_amount) DESC) AS store_rank
+FROM RETAIL_DB.RETAIL_FACT.FACT_SALES fs
+JOIN RETAIL_DB.RETAIL_CORE.CORE_EMPLOYEE ce 
+    ON fs.employee_key = ce.employee_key AND ce.current_flag = TRUE
+JOIN RETAIL_DB.RETAIL_CORE.CORE_STORE cs 
+    ON fs.store_key = cs.store_key AND cs.current_flag = TRUE
+GROUP BY
+    ce.employee_id, ce.first_name, ce.last_name, ce.position, cs.store_name, cs.store_id;
+
+/*
+Task TASK_EMPLOYEE_SALES_PERFORMANCE successfully created.
+
+*/
+ALTER TASK RETAIL_DB.TASKS.TASK_EMPLOYEE_SALES_PERFORMANCE RESUME;
+SHOW TASKS;
+
+SELECT * FROM RETAIL_DB.RETAIL_AGG.EMPLOYEE_SALES_PERFORMANCE;
+/*
+5001	Michael Brown	Store Manager	Main Store	1	1319.98	659.99	1
+5003	David Lee	Sales Associate	Main Store	2	769.98	384.99	2
+5002	Sarah Wilson	Store Manager	Downtown Store	2	2529.97	843.32	1
+5005	Thomas Anderson	StoreManager	Mall Store	1	769.99	769.99	1
+*/
+ALTER TASK RETAIL_DB.TASKS.TASK_EMPLOYEE_SALES_PERFORMANCE SUSPEND;
+/*
+Statement executed successfully.
+*/
+SHOW TASKS;
+
+
+                     ----------------------ALL CODES SUCESSFULLY RUNING--------------------
+ 
+SHOW TABLES IN SCHEMA RETAIL_DB.RETAIL_CORE;
+DROP TASK IF EXISTS RETAIL_DB.TASKS.CUSTOMER_SEGMENT_AGG_TASK;
+
+                 
